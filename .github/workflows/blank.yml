@@ -1,0 +1,77 @@
+name: Build
+'on':
+  schedule:
+    - cron: "4 23 * * 0"
+  push:
+    branches:
+      - main
+env:
+  GH_TOKEN: '${{ github.token }}'
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: 'mbstring,tokenizer,phar'
+      - name: Delete workflow runs
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          retain_days: 0
+          keep_minimum_runs: 0
+      - name: Check and release
+        run: >
+          rm -fr * .git .github
+          
+          cat <<EOF > Dockerfile
+          
+          FROM dunglas/frankenphp:latest-builder AS builder
+          
+          COPY --from=caddy:builder /usr/bin/xcaddy /usr/bin/xcaddy
+          
+          ENV CGO_ENABLED=1 XCADDY_SETCAP=1 XCADDY_GO_BUILD_FLAGS="-ldflags '-w -s'"
+          
+          RUN xcaddy build \
+              --output /usr/local/bin/frankenphp \
+              --with github.com/dunglas/frankenphp=./ \
+              --with github.com/dunglas/frankenphp/caddy=./caddy/ \
+              --with github.com/dunglas/caddy-cbrotli \
+              --with github.com/dunglas/mercure/caddy \
+              --with github.com/dunglas/vulcain/caddy \
+              --with github.com/caddy-dns/cloudflare
+
+          FROM dunglas/frankenphp AS runner
+
+          COPY --from=builder /usr/local/bin/frankenphp /usr/local/bin/frankenphp
+
+          RUN frankenphp list-modules | grep cloudflare
+          
+          EOF
+
+          docker build -t frankenphp .
+
+          mkdir -p .github/workflows
+
+          wget -qO .github/workflows/blank.yml  https://github.com/${{github.repository}}/raw/main/.github/workflows/blank.yml
+
+          git config --global init.defaultBranch main
+
+          git init
+
+          git add .
+
+          git config user.name "mainians"
+
+          git config user.email "61817665+mainians@users.noreply.github.com"
+
+          git commit -m "frankenphp amd64 binary"
+
+          git remote add origin "https://${{ github.actor}}:${{secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
+
+          git push origin main --force
